@@ -3,65 +3,121 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    color-scheme: dark;
-  }
+  :root { color-scheme: dark; }
 
-  * {
-    @apply border-surface-border;
-  }
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { font-size: 14px; }
 
   body {
-    @apply bg-surface text-slate-100 font-sans;
+    @apply bg-navy-900 text-slate-200 font-sans antialiased;
+    background-color: #0f1117;
   }
 
-  ::-webkit-scrollbar {
-    @apply w-1.5 h-1.5;
-  }
+  ::-webkit-scrollbar { @apply w-1.5 h-1.5; }
+  ::-webkit-scrollbar-track { background: #0f1117; }
+  ::-webkit-scrollbar-thumb { background: #2a2d3e; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3d52; }
 
-  ::-webkit-scrollbar-track {
-    @apply bg-surface;
+  input[type="range"] {
+    @apply w-full h-1.5 rounded-full appearance-none cursor-pointer;
+    background: #1e2130;
   }
-
-  ::-webkit-scrollbar-thumb {
-    @apply bg-surface-muted rounded-full;
+  input[type="range"]::-webkit-slider-thumb {
+    @apply appearance-none w-4 h-4 rounded-full cursor-pointer;
+    background: #2dd4bf;
+    border: 2px solid #0f1117;
   }
+  input[type="number"] {
+    @apply bg-surface-card border border-surface-border rounded-lg px-3 py-1.5
+           text-slate-200 text-sm outline-none w-20 text-center tabular-nums;
+  }
+  input[type="number"]:focus {
+    @apply border-teal-500;
+    box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.15);
+  }
+  /* Remove spinner arrows */
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 }
 
 @layer components {
+  /* ── Cards ─────────────────────────────────────────────────────── */
   .card {
     @apply bg-surface-card rounded-xl border border-surface-border shadow-card p-4;
   }
-
+  .card-sm {
+    @apply bg-surface-card rounded-lg border border-surface-border shadow-card p-3;
+  }
   .card-lg {
     @apply bg-surface-card rounded-xl border border-surface-border shadow-card-lg p-6;
   }
 
-  .stat-value {
-    @apply text-2xl font-bold text-slate-50 tabular-nums;
-  }
+  /* ── Stat display ───────────────────────────────────────────────── */
+  .stat-value { @apply text-xl font-bold text-slate-50 tabular-nums; }
+  .stat-label { @apply text-xs font-medium text-slate-500 uppercase tracking-wider; }
 
-  .stat-label {
-    @apply text-xs font-medium text-slate-400 uppercase tracking-wider;
-  }
-
+  /* ── Badges ─────────────────────────────────────────────────────── */
   .badge {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border;
   }
+  .badge-green  { @apply bg-emerald-900/40 text-emerald-300 border-emerald-700/40; }
+  .badge-red    { @apply bg-rose-900/40    text-rose-300    border-rose-700/40;    }
+  .badge-yellow { @apply bg-amber-900/40   text-amber-300   border-amber-700/40;   }
+  .badge-blue   { @apply bg-blue-900/40    text-blue-300    border-blue-700/40;    }
+  .badge-teal   { @apply bg-teal-900/40    text-teal-300    border-teal-700/40;    }
+  .badge-slate  { @apply bg-slate-800/60   text-slate-400   border-slate-700/40;   }
 
-  .badge-green  { @apply bg-emerald-900/60 text-emerald-300; }
-  .badge-red    { @apply bg-rose-900/60 text-rose-300; }
-  .badge-yellow { @apply bg-amber-900/60 text-amber-300; }
-  .badge-blue   { @apply bg-blue-900/60 text-blue-300; }
-  .badge-purple { @apply bg-purple-900/60 text-purple-300; }
-
+  /* ── Sidebar nav ────────────────────────────────────────────────── */
   .nav-link {
     @apply flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium
-           text-slate-400 hover:text-slate-100 hover:bg-surface-card
-           transition-colors duration-150;
+           text-slate-400 hover:text-slate-100 hover:bg-surface-raised
+           transition-colors duration-150 cursor-pointer;
+  }
+  .nav-link-active {
+    @apply text-teal-300 bg-teal-900/20 hover:bg-teal-900/30;
   }
 
-  .nav-link-active {
-    @apply text-slate-100 bg-brand-700/40 hover:bg-brand-700/50;
+  /* ── Section headings ───────────────────────────────────────────── */
+  .section-title {
+    @apply text-base font-semibold text-slate-100 flex items-center gap-2;
+  }
+  .section-subtitle {
+    @apply text-xs text-slate-500 mt-0.5;
+  }
+
+  /* ── Range toggle buttons ───────────────────────────────────────── */
+  .range-btn {
+    @apply px-2.5 py-1 text-xs font-medium rounded-md text-slate-500
+           hover:text-slate-200 hover:bg-surface-muted transition-colors duration-100;
+  }
+  .range-btn-active {
+    @apply text-teal-300 bg-teal-900/30;
+  }
+
+  /* ── Table ──────────────────────────────────────────────────────── */
+  .tbl-head {
+    @apply text-xs font-medium text-slate-500 uppercase tracking-wider px-3 py-2.5
+           text-right border-b border-surface-border select-none cursor-pointer
+           hover:text-slate-300 transition-colors whitespace-nowrap;
+  }
+  .tbl-head-left {
+    @apply text-left;
+  }
+  .tbl-cell {
+    @apply px-3 py-2.5 text-sm tabular-nums text-right border-b border-surface-border/50;
+  }
+  .tbl-cell-left {
+    @apply text-left;
+  }
+
+  /* ── Pressure indicator ─────────────────────────────────────────── */
+  .pressure-accelerating { @apply text-rose-400; }
+  .pressure-decelerating { @apply text-emerald-400; }
+  .pressure-flat         { @apply text-amber-400; }
+
+  /* ── Tooltip (chart) ────────────────────────────────────────────── */
+  .chart-tooltip {
+    @apply bg-navy-800 border border-surface-muted rounded-lg px-3 py-2.5 text-xs shadow-xl;
   }
 }

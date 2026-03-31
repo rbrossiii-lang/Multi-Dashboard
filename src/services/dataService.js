@@ -1,193 +1,180 @@
 /**
  * dataService.js
  *
- * Central data-fetching layer for MultiFam Intel.
- * Primary source: FRED API (api.stlouisfed.org/fred)
- * Secondary sources: BLS, Census, CoStar/RealPage vendor API
- *
- * All functions return Promises and are designed for use with
- * React Query (useQuery / useQueries).
- *
- * Environment variables (see .env.example):
- *   VITE_FRED_API_KEY
- *   VITE_CENSUS_API_KEY
- *   VITE_BLS_API_KEY
- *   VITE_RENT_DATA_API_KEY
+ * FRED API integration with localStorage caching (24-hr TTL).
+ * All public functions return Promise<Array<{date, value, ...}>> or
+ * Promise<Object<seriesId, Array>> for multi-series fetches.
  */
 
 import axios from 'axios'
+import { getCached, setCached } from '@/utils/cache'
+import { computeYoY } from '@/utils/fredHelpers'
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Axios instances — one per upstream API
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Axios instances ─────────────────────────────────────────────────────────
 
-const fredClient = axios.create({
+const fred = axios.create({
   baseURL: import.meta.env.VITE_FRED_BASE_URL ?? 'https://api.stlouisfed.org/fred',
-  params: {
-    api_key:     import.meta.env.VITE_FRED_API_KEY,
-    file_type:   'json',
-  },
+  timeout: 15_000,
 })
 
-const blsClient = axios.create({
-  baseURL: import.meta.env.VITE_BLS_BASE_URL ?? 'https://api.bls.gov/publicAPI/v2',
-  headers: { 'Content-Type': 'application/json' },
+// Attach API key to every FRED request
+fred.interceptors.request.use(cfg => {
+  cfg.params = {
+    api_key:   import.meta.env.VITE_FRED_API_KEY ?? '',
+    file_type: 'json',
+    ...cfg.params,
+  }
+  return cfg
 })
 
-const censusClient = axios.create({
-  baseURL: import.meta.env.VITE_CENSUS_BASE_URL ?? 'https://api.census.gov/data',
-})
+// ─── Core helpers ─────────────────────────────────────────────────────────────
 
-const rentDataClient = axios.create({
-  baseURL: import.meta.env.VITE_RENT_DATA_BASE_URL,
-  headers: {
-    Authorization: `Bearer ${import.meta.env.VITE_RENT_DATA_API_KEY}`,
-  },
-})
+function parseObs(raw) {
+  return raw
+    .filter(o => o.value !== '.' && o.value !== '')
+    .map(o => ({ date: o.date, value: parseFloat(o.value) }))
+}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Macro — CPI Components
-// ─────────────────────────────────────────────────────────────────────────────
+async function fetchSeries(seriesId, params = {}) {
+  const key = `obs_${seriesId}_${params.observationStart || 'all'}_${params.frequency || 'default'}`
+  const hit = getCached(key)
+  if (hit) return hit
+
+  const { data } = await fred.get('/series/observations', {
+    params: {
+      series_id:          seriesId,
+      observation_start:  params.observationStart,
+      observation_end:    params.observationEnd,
+      ...(params.frequency ? { frequency: params.frequency } : {}),
+    },
+  })
+
+  const result = parseObs(data.observations ?? [])
+  setCached(key, result)
+  return result
+}
+
+async function fetchMultiple(seriesIds, params = {}) {
+  const entries = await Promise.all(
+    seriesIds.map(id =>
+      fetchSeries(id, params)
+        .then(data => [id, data])
+        .catch(() => [id, []]),       // Graceful fallback: empty array on error
+    ),
+  )
+  return Object.fromEntries(entries)
+}
+
+// ─── CPI Components ───────────────────────────────────────────────────────────
 
 /**
- * Fetch CPI component series from FRED.
- * Covers: All Items, Shelter, Primary Rent, OER, Energy, Food.
- *
- * @param {Object}  options
- * @param {string}  options.observationStart  ISO date string (e.g. '2019-01-01')
- * @param {string}  [options.observationEnd]  ISO date string; defaults to today
- * @param {string}  [options.frequency]       FRED frequency code: 'm', 'q', 'a'
- * @returns {Promise<Object>}  Keyed by series ID, each value is an array of
- *                             { date: string, value: number } observations
+ * Fetch CPI total + all sub-components.
+ * @returns {Promise<Object>} { CPIAUCSL: [{date, value, yoy}], ... }
  */
 export async function fetchCPIComponents(options = {}) {
-  // TODO: implement
+  const start = options.observationStart ?? '2010-01-01'
+  const seriesIds = [
+    'CPIAUCSL', 'CPILFESL',
+    'CUSR0000SAH1', 'CUSR0000SEHC',
+    'CPIUFDSL', 'CPIENGSL',
+    'CUSR0000SASLE', 'CUSR0000SACL1',
+    'CUUR0000SAT1', 'CPIMEDSL', 'CPIAPPSL',
+  ]
+  const raw = await fetchMultiple(seriesIds, { observationStart: start })
+  // Compute YoY % change for each series
+  return Object.fromEntries(
+    Object.entries(raw).map(([id, obs]) => [id, computeYoY(obs)])
+  )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Macro — Interest Rates & Treasury Yields
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Yields ───────────────────────────────────────────────────────────────────
 
 /**
- * Fetch Treasury yield series and benchmark rates from FRED.
- * Covers: 2Y, 10Y, 10Y-2Y spread, Fed Funds, SOFR, 30Y mortgage.
- *
- * @param {Object}  options
- * @param {string}  options.observationStart
- * @param {string}  [options.observationEnd]
- * @param {string}  [options.frequency]
- * @returns {Promise<Object>}  Keyed by series ID
+ * Fetch Treasury yields: DGS10, DGS5, DGS2, T10Y2Y.
+ * @returns {Promise<Object>} { DGS10: [{date, value}], ... }
  */
 export async function fetchYields(options = {}) {
-  // TODO: implement
+  const start = options.observationStart ?? '2010-01-01'
+  return fetchMultiple(['DGS10', 'DGS5', 'DGS2', 'T10Y2Y'], {
+    observationStart: start,
+  })
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Macro — Market Volatility
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── VIX ─────────────────────────────────────────────────────────────────────
 
 /**
- * Fetch CBOE Volatility Index (VIX) daily observations from FRED.
- *
- * @param {Object}  options
- * @param {string}  options.observationStart
- * @param {string}  [options.observationEnd]
- * @returns {Promise<Array<{ date: string, value: number }>>}
+ * Fetch CBOE VIX daily observations.
+ * @returns {Promise<Array<{date, value}>>}
  */
 export async function fetchVIX(options = {}) {
-  // TODO: implement
+  const start = options.observationStart ?? '2015-01-01'
+  return fetchSeries('VIXCLS', { observationStart: start })
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Macro — Consumer Wellbeing Indicators
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Wellbeing Indicators ─────────────────────────────────────────────────────
 
 /**
- * Fetch consumer health / demand-side indicators from FRED.
- * Covers: national unemployment, JOLTS openings, consumer sentiment (UMich),
- *         real disposable income, PCE, retail sales.
- *
- * @param {Object}  options
- * @param {string}  options.observationStart
- * @param {string}  [options.observationEnd]
- * @param {string}  [options.frequency]
- * @returns {Promise<Object>}  Keyed by series ID
+ * Fetch all 8 middle-class wellbeing series.
+ * @returns {Promise<Object>} Keyed by FRED series ID
  */
 export async function fetchWellbeingIndicators(options = {}) {
-  // TODO: implement
+  const start = options.observationStart ?? '2010-01-01'
+  return fetchMultiple(
+    ['UNRATE', 'PSAVERT', 'JTSJOL', 'JTSHIR',
+     'DRCCLACBS', 'DRAUTOACBS', 'DRSFRMACBS', 'DRSLACBS'],
+    { observationStart: start },
+  )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Metro — Vacancy
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Metro Unemployment ───────────────────────────────────────────────────────
 
 /**
- * Fetch multifamily vacancy rate time-series for a specific metro.
- * Source: CoStar / RealPage vendor API (configured via env).
- *
- * @param {string}  metro   Metro ID from METROS constant (e.g. 'ATL')
- * @param {Object}  options
- * @param {string}  options.observationStart
- * @param {string}  [options.observationEnd]
- * @param {string}  [options.propertyClass]   'A' | 'B' | 'C' | 'all'
- * @returns {Promise<Array<{ date: string, vacancyRate: number }>>}
+ * Fetch metro-level unemployment from BLS LAUS via FRED.
+ * Falls back to national UNRATE on series error.
+ * @param {string} fredSeriesId  e.g. 'DALL806UR'
+ * @param {Object} options
+ * @returns {Promise<{data: Array, isFallback: boolean}>}
  */
-export async function fetchMetroVacancy(metro, options = {}) {
-  // TODO: implement
+export async function fetchMetroUnemployment(fredSeriesId, options = {}) {
+  const start = options.observationStart ?? '2010-01-01'
+  try {
+    const data = await fetchSeries(fredSeriesId, { observationStart: start })
+    if (data.length === 0) throw new Error('empty')
+    return { data, isFallback: false }
+  } catch {
+    const data = await fetchSeries('UNRATE', { observationStart: start })
+    return { data, isFallback: true }
+  }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Metro — Construction Pipeline
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Metro Market Data (vacancy, construction, rents) ─────────────────────────
+// Real implementations require CoStar/RealPage/ApartmentList credentials.
+// The stubs below are wired to return mock data from mockData.js.
+// Swap out the import when real endpoints are available.
 
-/**
- * Fetch multifamily construction pipeline data for a metro.
- * Source: Census Building Permits Survey + CoStar deliveries data.
- *
- * @param {string}  metro   Metro ID
- * @param {Object}  options
- * @param {string}  options.observationStart
- * @param {string}  [options.observationEnd]
- * @returns {Promise<Array<{ date: string, permitsIssued: number, unitsDelivered: number, underConstruction: number }>>}
- */
-export async function fetchMetroConstruction(metro, options = {}) {
-  // TODO: implement
+import {
+  getDFWVacancy,
+  getDFWConstruction,
+  getDFWRents,
+  getMetroVacancySeries,
+  getMetroRentSeries,
+} from '@/utils/mockData'
+
+export async function fetchMetroVacancy(slug, _options = {}) {
+  if (slug === 'dallas-fort-worth') return getDFWVacancy()
+  return getMetroVacancySeries(slug)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Metro — Rent Trends
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Fetch effective rent and rent growth data for a metro.
- * Source: CoStar / RealPage vendor API.
- *
- * @param {string}  metro   Metro ID
- * @param {Object}  options
- * @param {string}  options.observationStart
- * @param {string}  [options.observationEnd]
- * @param {string}  [options.unitType]   'studio' | '1br' | '2br' | '3br' | 'all'
- * @param {string}  [options.propertyClass]
- * @returns {Promise<Array<{ date: string, effectiveRent: number, askingRent: number, yoyGrowth: number }>>}
- */
-export async function fetchMetroRents(metro, options = {}) {
-  // TODO: implement
+export async function fetchMetroConstruction(slug, _options = {}) {
+  if (slug === 'dallas-fort-worth') return getDFWConstruction()
+  // Generic placeholder for other metros
+  return getDFWConstruction().map(d => ({ ...d, value: d.pctOfStock }))
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Metro — Unemployment
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Fetch metro-level unemployment rate from the BLS Local Area Unemployment
- * Statistics (LAUS) program.
- *
- * @param {string}  metro   Metro ID
- * @param {Object}  options
- * @param {number}  options.startYear   Four-digit start year
- * @param {number}  [options.endYear]   Four-digit end year; defaults to current year
- * @returns {Promise<Array<{ date: string, unemploymentRate: number }>>}
- */
-export async function fetchMetroUnemployment(metro, options = {}) {
-  // TODO: implement
+export async function fetchMetroRents(slug, _options = {}) {
+  if (slug === 'dallas-fort-worth') return getDFWRents()
+  return getMetroRentSeries(slug)
 }
+
+// ─── Re-export low-level fetchSeries for ad-hoc use ──────────────────────────
+export { fetchSeries }

@@ -1,155 +1,146 @@
 /**
  * useMarketData.js
  *
- * Custom React Query hooks wrapping every dataService function.
- * Components import these hooks instead of calling dataService directly.
+ * React Query hooks wrapping every dataService function.
+ * Components should import these hooks rather than calling dataService directly.
  */
 
 import { useQuery, useQueries } from '@tanstack/react-query'
-import { subYears, format } from 'date-fns'
+import { subYears, format }     from 'date-fns'
 import {
   fetchCPIComponents,
   fetchYields,
   fetchVIX,
   fetchWellbeingIndicators,
+  fetchMetroUnemployment,
   fetchMetroVacancy,
   fetchMetroConstruction,
   fetchMetroRents,
-  fetchMetroUnemployment,
 } from '@/services/dataService'
-import { STALE_TIMES, DEFAULT_LOOKBACK_YEARS } from '@/utils/constants'
+import { METRO_BY_SLUG, STALE_TIMES } from '@/utils/constants'
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── helpers ──────────────────────────────────────────────────────────────────
 
-function defaultStartDate(yearsBack = DEFAULT_LOOKBACK_YEARS) {
+function startDate(yearsBack = 5) {
   return format(subYears(new Date(), yearsBack), 'yyyy-MM-dd')
 }
 
-// ─── Macro hooks ─────────────────────────────────────────────────────────────
+// ─── Macro ────────────────────────────────────────────────────────────────────
 
-export function useCPIComponents(options = {}) {
-  const opts = { observationStart: defaultStartDate(), ...options }
+export function useCPIComponents(yearsBack = 12) {
   return useQuery({
-    queryKey:  ['cpi-components', opts],
-    queryFn:   () => fetchCPIComponents(opts),
+    queryKey:  ['cpi-components', yearsBack],
+    queryFn:   () => fetchCPIComponents({ observationStart: startDate(yearsBack) }),
     staleTime: STALE_TIMES.FRED,
   })
 }
 
-export function useYields(options = {}) {
-  const opts = { observationStart: defaultStartDate(), ...options }
+export function useYields(yearsBack = 10) {
   return useQuery({
-    queryKey:  ['yields', opts],
-    queryFn:   () => fetchYields(opts),
+    queryKey:  ['yields', yearsBack],
+    queryFn:   () => fetchYields({ observationStart: startDate(yearsBack) }),
     staleTime: STALE_TIMES.REALTIME,
   })
 }
 
-export function useVIX(options = {}) {
-  const opts = { observationStart: defaultStartDate(2), ...options }
+export function useVIX(yearsBack = 5) {
   return useQuery({
-    queryKey:  ['vix', opts],
-    queryFn:   () => fetchVIX(opts),
+    queryKey:  ['vix', yearsBack],
+    queryFn:   () => fetchVIX({ observationStart: startDate(yearsBack) }),
     staleTime: STALE_TIMES.REALTIME,
   })
 }
 
-export function useWellbeingIndicators(options = {}) {
-  const opts = { observationStart: defaultStartDate(), ...options }
+export function useWellbeingIndicators(yearsBack = 12) {
   return useQuery({
-    queryKey:  ['wellbeing', opts],
-    queryFn:   () => fetchWellbeingIndicators(opts),
+    queryKey:  ['wellbeing-indicators', yearsBack],
+    queryFn:   () => fetchWellbeingIndicators({ observationStart: startDate(yearsBack) }),
     staleTime: STALE_TIMES.FRED,
   })
 }
 
-// ─── Metro hooks ─────────────────────────────────────────────────────────────
+// ─── Metro ────────────────────────────────────────────────────────────────────
 
-export function useMetroVacancy(metro, options = {}) {
-  const opts = { observationStart: defaultStartDate(), ...options }
+export function useMetroUnemployment(slug) {
+  const metro = METRO_BY_SLUG[slug]
   return useQuery({
-    queryKey:  ['metro-vacancy', metro, opts],
-    queryFn:   () => fetchMetroVacancy(metro, opts),
-    staleTime: STALE_TIMES.MARKET,
-    enabled:   !!metro,
-  })
-}
-
-export function useMetroConstruction(metro, options = {}) {
-  const opts = { observationStart: defaultStartDate(), ...options }
-  return useQuery({
-    queryKey:  ['metro-construction', metro, opts],
-    queryFn:   () => fetchMetroConstruction(metro, opts),
-    staleTime: STALE_TIMES.MARKET,
-    enabled:   !!metro,
-  })
-}
-
-export function useMetroRents(metro, options = {}) {
-  const opts = { observationStart: defaultStartDate(), ...options }
-  return useQuery({
-    queryKey:  ['metro-rents', metro, opts],
-    queryFn:   () => fetchMetroRents(metro, opts),
-    staleTime: STALE_TIMES.MARKET,
-    enabled:   !!metro,
-  })
-}
-
-export function useMetroUnemployment(metro, options = {}) {
-  const opts = {
-    startYear: new Date().getFullYear() - DEFAULT_LOOKBACK_YEARS,
-    ...options,
-  }
-  return useQuery({
-    queryKey:  ['metro-unemployment', metro, opts],
-    queryFn:   () => fetchMetroUnemployment(metro, opts),
+    queryKey:  ['metro-unemployment', slug],
+    queryFn:   () => fetchMetroUnemployment(metro?.fredUR ?? 'UNRATE'),
+    enabled:   !!slug && !!metro,
     staleTime: STALE_TIMES.FRED,
-    enabled:   !!metro,
+  })
+}
+
+export function useMetroVacancy(slug) {
+  return useQuery({
+    queryKey:  ['metro-vacancy', slug],
+    queryFn:   () => fetchMetroVacancy(slug),
+    enabled:   !!slug,
+    staleTime: STALE_TIMES.MARKET,
+  })
+}
+
+export function useMetroConstruction(slug) {
+  return useQuery({
+    queryKey:  ['metro-construction', slug],
+    queryFn:   () => fetchMetroConstruction(slug),
+    enabled:   !!slug,
+    staleTime: STALE_TIMES.MARKET,
+  })
+}
+
+export function useMetroRents(slug) {
+  return useQuery({
+    queryKey:  ['metro-rents', slug],
+    queryFn:   () => fetchMetroRents(slug),
+    enabled:   !!slug,
+    staleTime: STALE_TIMES.MARKET,
   })
 }
 
 /**
- * Fetch all four metro data streams in parallel for a given metro.
- * Returns an object: { vacancy, construction, rents, unemployment }
- * Each value mirrors the shape returned by useQuery.
+ * Fetch all four metro data streams in parallel.
+ * @returns {{ unemployment, vacancy, construction, rents }}
  */
-export function useMetroAll(metro, options = {}) {
-  const startDate = defaultStartDate()
-  const startYear = new Date().getFullYear() - DEFAULT_LOOKBACK_YEARS
+export function useMetroAll(slug) {
+  const metro = METRO_BY_SLUG[slug]
+  const enabled = !!slug && !!metro
 
   const results = useQueries({
     queries: [
       {
-        queryKey:  ['metro-vacancy',      metro, { observationStart: startDate, ...options }],
-        queryFn:   () => fetchMetroVacancy(metro, { observationStart: startDate, ...options }),
-        staleTime: STALE_TIMES.MARKET,
-        enabled:   !!metro,
-      },
-      {
-        queryKey:  ['metro-construction', metro, { observationStart: startDate, ...options }],
-        queryFn:   () => fetchMetroConstruction(metro, { observationStart: startDate, ...options }),
-        staleTime: STALE_TIMES.MARKET,
-        enabled:   !!metro,
-      },
-      {
-        queryKey:  ['metro-rents',        metro, { observationStart: startDate, ...options }],
-        queryFn:   () => fetchMetroRents(metro, { observationStart: startDate, ...options }),
-        staleTime: STALE_TIMES.MARKET,
-        enabled:   !!metro,
-      },
-      {
-        queryKey:  ['metro-unemployment', metro, { startYear, ...options }],
-        queryFn:   () => fetchMetroUnemployment(metro, { startYear, ...options }),
+        queryKey: ['metro-unemployment', slug],
+        queryFn:  () => fetchMetroUnemployment(metro?.fredUR ?? 'UNRATE'),
+        enabled,
         staleTime: STALE_TIMES.FRED,
-        enabled:   !!metro,
+      },
+      {
+        queryKey: ['metro-vacancy', slug],
+        queryFn:  () => fetchMetroVacancy(slug),
+        enabled,
+        staleTime: STALE_TIMES.MARKET,
+      },
+      {
+        queryKey: ['metro-construction', slug],
+        queryFn:  () => fetchMetroConstruction(slug),
+        enabled,
+        staleTime: STALE_TIMES.MARKET,
+      },
+      {
+        queryKey: ['metro-rents', slug],
+        queryFn:  () => fetchMetroRents(slug),
+        enabled,
+        staleTime: STALE_TIMES.MARKET,
       },
     ],
   })
 
   return {
-    vacancy:      results[0],
-    construction: results[1],
-    rents:        results[2],
-    unemployment: results[3],
+    unemployment: results[0],
+    vacancy:      results[1],
+    construction: results[2],
+    rents:        results[3],
+    isLoading:    results.some(r => r.isLoading),
+    isError:      results.some(r => r.isError),
   }
 }
